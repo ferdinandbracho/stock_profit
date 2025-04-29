@@ -1,298 +1,195 @@
-import requests
-from datetime import datetime, timedelta
-from typing import Dict, Tuple, Optional, List, Any
 import time
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, Tuple, Optional
+
+import yfinance as yf
+
+# Set up simple logging for better output control
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 class Stock:
-    def __init__(self, symbol: str, name: str):
-        """Initialize a Stock object.
-        
-        Args:
-            symbol: The stock's ticker symbol
-            name: The full name of the company
-        """
+    def __init__(self, symbol: str, name: Optional[str] = None):
+        """Create a stock with its symbol and (optional) company name."""
         self.symbol = symbol
-        self.name = name
-        self._price_cache = {}  # Cache prices to avoid redundant API calls
-        
-    def price(self, date: datetime, api_key: str) -> float:
-        """Get the stock price on a specific date using Alpha Vantage API.
-        
-        Args:
-            date: The date to get the price for
-            api_key: Alpha Vantage API key
-            
-        Returns:
-            The stock closing price on the given date or the closest available trading day
-            
-        Raises:
-            ValueError: If API call fails or data cannot be retrieved
-        """
-        # Check cache first
-        date_str = date.strftime('%Y-%m-%d')
+        self.name = name or symbol
+        self._price_cache: Dict[str, float] = {}
+
+    def __repr__(self):
+        return f"<Stock {self.symbol} - {self.name}>"
+
+    def price(self, date: datetime) -> float:
+        """Get the stock's closing price for a specific date."""
+        date_str = date.strftime("%Y-%m-%d")
         if date_str in self._price_cache:
             return self._price_cache[date_str]
-        
-        # Format date for API call
-        # Alpha Vantage expects YYYY-MM-DD
-        
-        # Make API call to Alpha Vantage for historical data
-        url = f"https://www.alphavantage.co/query"
-        params = {
-            "function": "TIME_SERIES_DAILY",
-            "symbol": self.symbol,
-            "outputsize": "full",  # For older data, beyond 100 days
-            "apikey": api_key
-        }
-        
+
         try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()  # Raise exception for non-200 status codes
-            data = response.json()
-            
-            # Extract time series data
-            if "Time Series (Daily)" not in data:
-                error_msg = data.get("Error Message", "Unknown error")
-                raise ValueError(f"API Error: {error_msg}")
-                
-            time_series = data["Time Series (Daily)"]
-            
-            # Try to get data for the exact date
-            if date_str in time_series:
-                close_price = float(time_series[date_str]["4. close"])
-                self._price_cache[date_str] = close_price
-                return close_price
-            
-            # If exact date not found (e.g., weekend or holiday), find closest previous trading day
-            closest_date = self._find_closest_trading_day(date, time_series)
-            if closest_date:
-                close_price = float(time_series[closest_date]["4. close"])
-                self._price_cache[date_str] = close_price  # Cache with original date
-                return close_price
-            
-            raise ValueError(f"No price data available for {self.symbol} on or before {date_str}")
-            
-        except requests.RequestException as e:
-            raise ValueError(f"API request failed: {str(e)}")
-        except (KeyError, ValueError) as e:
-            raise ValueError(f"Error processing data: {str(e)}")
-    
-    def _find_closest_trading_day(self, target_date: datetime, time_series: Dict) -> Optional[str]:
-        """Find the closest previous trading day in the time series data.
-        
-        Args:
-            target_date: The target date
-            time_series: Dictionary of time series data from Alpha Vantage
-            
-        Returns:
-            Date string of closest previous trading day or None if not found
-        """
-        target_date_str = target_date.strftime('%Y-%m-%d')
-        
-        # Get all dates in the time series
-        all_dates = sorted(time_series.keys(), reverse=True)
-        
-        # Find the closest previous date
-        for date_str in all_dates:
-            if date_str <= target_date_str:
-                return date_str
-        
-        return None
+            ticker = yf.Ticker(self.symbol)
+
+            # yfinance expects end date to be *after* start date
+            next_day = (date + timedelta(days=1)).strftime("%Y-%m-%d")
+            hist = ticker.history(start=date_str, end=next_day)
+
+            if hist.empty:
+                # If no data (holiday, weekend, etc), try previous days
+                for days_back in range(1, 5):
+                    previous_date = date - timedelta(days=days_back)
+                    previous_date_str = previous_date.strftime("%Y-%m-%d")
+                    previous_next_day = (previous_date + timedelta(days=1)).strftime("%Y-%m-%d")
+                    hist = ticker.history(start=previous_date_str, end=previous_next_day)
+                    if not hist.empty:
+                        break
+
+            if hist.empty:
+                raise ValueError(f"No price data available for {self.symbol} on or before {date_str}")
+
+            close_price = hist['Close'].iloc[0]
+            self._price_cache[date_str] = close_price
+            return close_price
+
+        except Exception as e:
+            raise ValueError(f"Failed to fetch price for {self.symbol}: {e}")
 
 
 class Portfolio:
-    def __init__(self, api_key: str):
-        """Initialize an empty portfolio.
-        
-        Args:
-            api_key: Alpha Vantage API key
-        """
-        # Dictionary mapping symbol to (Stock, quantity) tuple
+    def __init__(self):
+        """Start with an empty portfolio."""
         self.stocks: Dict[str, Tuple[Stock, int]] = {}
-        self.api_key = api_key
-        
+
     def add_stock(self, stock: Stock, quantity: int) -> None:
-        """Add shares of a stock to the portfolio.
-        
-        Args:
-            stock: The Stock object to add
-            quantity: Number of shares to add
-            
-        Raises:
-            TypeError: If stock is not a Stock object
-            ValueError: If quantity is not positive
-        """
+        """Add a certain number of shares of a stock to the portfolio."""
         if not isinstance(stock, Stock):
             raise TypeError("First argument must be a Stock object")
-        
         if not isinstance(quantity, int) or quantity <= 0:
             raise ValueError("Quantity must be a positive integer")
-        
+
         if stock.symbol in self.stocks:
             existing_stock, existing_quantity = self.stocks[stock.symbol]
             self.stocks[stock.symbol] = (existing_stock, existing_quantity + quantity)
         else:
             self.stocks[stock.symbol] = (stock, quantity)
-    
+
     def remove_stock(self, symbol: str, quantity: int) -> None:
-        """Remove shares of a stock from the portfolio.
-        
-        Args:
-            symbol: The ticker symbol of the stock to remove
-            quantity: Number of shares to remove
-            
-        Raises:
-            KeyError: If the stock is not in the portfolio
-            ValueError: If trying to remove more shares than in the portfolio
-        """
+        """Remove a certain number of shares of a stock."""
         if symbol not in self.stocks:
             raise KeyError(f"Stock {symbol} is not in the portfolio")
-        
-        _, existing_quantity = self.stocks[symbol]
-        
+
+        stock, existing_quantity = self.stocks[symbol]
+
         if quantity > existing_quantity:
-            raise ValueError(
-                f"Cannot remove {quantity} shares of {symbol}, "
-                f"only {existing_quantity} shares are in the portfolio"
-            )
-        
+            raise ValueError(f"Cannot remove {quantity} shares of {symbol}, only {existing_quantity} available")
+
         if quantity == existing_quantity:
             del self.stocks[symbol]
         else:
-            self.stocks[symbol] = (self.stocks[symbol][0], existing_quantity - quantity)
-    
+            self.stocks[symbol] = (stock, existing_quantity - quantity)
+
     def get_value(self, date: datetime) -> float:
-        """Calculate the total value of the portfolio on a specific date.
-        
-        Args:
-            date: The date to calculate the value for
-            
-        Returns:
-            The total value of all stocks in the portfolio
-        """
+        """Calculate how much the portfolio is worth on a given date."""
         total_value = 0.0
-        
+        logging.info(f"\nPortfolio value on {date.strftime('%Y-%m-%d')}:")
         for symbol, (stock, quantity) in self.stocks.items():
             try:
-                # Add delay to avoid API rate limits
-                time.sleep(0.2)  # 200ms delay between API calls
-                price = stock.price(date, self.api_key)
-                total_value += price * quantity
-                print(f"{symbol}: {quantity} shares at ${price:.2f} = ${price * quantity:.2f}")
+                time.sleep(0.5)  # Be nice and avoid hammering Yahoo's servers
+                price = stock.price(date)
+                stock_value = price * quantity
+                total_value += stock_value
+                logging.info(f"- {stock.name} ({symbol}): {quantity} shares at ${price:.2f} each = ${stock_value:.2f}")
             except ValueError as e:
-                print(f"Warning: {str(e)}")
-        
+                logging.warning(f"Warning: {e}")
+
+        logging.info(f"Total portfolio value: ${total_value:.2f}\n")
         return total_value
-    
+
     def profit(self, start_date: datetime, end_date: datetime) -> float:
-        """Calculate the profit between two dates.
-        
-        Args:
-            start_date: The starting date
-            end_date: The ending date
-            
-        Returns:
-            The profit (or loss if negative) between the two dates
-            
-        Raises:
-            TypeError: If either argument is not a datetime
-            ValueError: If start_date is after end_date
-        """
+        """Figure out how much profit (or loss) you made between two dates."""
         if not isinstance(start_date, datetime) or not isinstance(end_date, datetime):
-            raise TypeError("Both arguments must be datetime objects")
-        
+            raise TypeError("Dates must be datetime objects")
         if start_date > end_date:
             raise ValueError("Start date must be before end date")
-        
-        print(f"\nCalculating portfolio value on {start_date.strftime('%Y-%m-%d')}:")
+
         start_value = self.get_value(start_date)
-        print(f"Total portfolio value on start date: ${start_value:.2f}")
-        
-        print(f"\nCalculating portfolio value on {end_date.strftime('%Y-%m-%d')}:")
         end_value = self.get_value(end_date)
-        print(f"Total portfolio value on end date: ${end_value:.2f}")
-        
+
         profit_amount = end_value - start_value
-        print(f"\nTotal profit: ${profit_amount:.2f}")
-        
+        logging.info(f"Profit from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}: ${profit_amount:.2f}\n")
         return profit_amount
-    
+
     def annualized_return(self, start_date: datetime, end_date: datetime) -> float:
-        """Calculate the annualized return between two dates.
-        
-        Args:
-            start_date: The starting date
-            end_date: The ending date
-            
-        Returns:
-            The annualized return as a decimal (not percentage)
-            
-        Raises:
-            TypeError: If either argument is not a datetime
-            ValueError: If start_date is after end_date or if portfolio had zero value
-        """
+        """Calculate the annualized return for the portfolio."""
         if not isinstance(start_date, datetime) or not isinstance(end_date, datetime):
-            raise TypeError("Both arguments must be datetime objects")
-        
+            raise TypeError("Dates must be datetime objects")
         if start_date >= end_date:
             raise ValueError("Start date must be before end date")
-        
-        print(f"\nCalculating portfolio value on {start_date.strftime('%Y-%m-%d')}:")
+
         start_value = self.get_value(start_date)
-        print(f"Total portfolio value on start date: ${start_value:.2f}")
-        
         if start_value <= 0:
-            raise ValueError("Portfolio had zero or negative value on start date")
-        
-        print(f"\nCalculating portfolio value on {end_date.strftime('%Y-%m-%d')}:")
+            logging.error("Portfolio had zero or negative value on start date. Cannot calculate returns.")
+            return 0.0
+
         end_value = self.get_value(end_date)
-        print(f"Total portfolio value on end date: ${end_value:.2f}")
-        
-        # Calculate the time difference in years
+
         days_diff = (end_date - start_date).days
         years_diff = days_diff / 365.25
-        
-        # Calculate total return
         total_return = end_value / start_value
-        
-        # Calculate annualized return using the formula: (totalReturn)^(1/yearDiff) - 1
         annualized_return = total_return ** (1 / years_diff) - 1
-        
-        print(f"\nTotal return: {(total_return - 1) * 100:.2f}%")
-        print(f"Time period: {days_diff} days ({years_diff:.2f} years)")
-        print(f"Annualized return: {annualized_return * 100:.2f}%")
-        
+
+        logging.info("\nSummary of returns:")
+        logging.info(f"- Total return: {(total_return - 1) * 100:.2f}%")
+        logging.info(f"- Time period: {days_diff} days ({years_diff:.2f} years)")
+        logging.info(f"- Annualized return: {annualized_return * 100:.2f}%\n")
+
         return annualized_return
 
 
-# Example usage
-def example():
-    # You would need to replace this with your actual Alpha Vantage API key
-    API_KEY = "YOUR_ALPHA_VANTAGE_API_KEY"
-    
-    # Create some stocks
+def example_portfolio():
+    """Example run to test the portfolio functionality."""
     aapl = Stock("AAPL", "Apple Inc.")
     msft = Stock("MSFT", "Microsoft Corporation")
     googl = Stock("GOOGL", "Alphabet Inc.")
-    
-    # Create a portfolio and add stocks
-    portfolio = Portfolio(API_KEY)
+
+    portfolio = Portfolio()
     portfolio.add_stock(aapl, 10)
     portfolio.add_stock(msft, 5)
     portfolio.add_stock(googl, 3)
-    
-    # Define date range - using older dates as example to ensure data availability
-    # Alpha Vantage has better historical data
-    start_date = datetime(2022, 1, 3)  # First trading day of 2022
-    end_date = datetime(2022, 12, 30)  # Last trading day of 2022
-    
-    # Calculate profit
-    profit = portfolio.profit(start_date, end_date)
-    
-    # Calculate annualized return
-    ann_return = portfolio.annualized_return(start_date, end_date)
+
+    start_date = datetime(2024, 1, 3)
+    end_date = datetime(2024, 12, 30)
+
+    try:
+        # Fetch portfolio values ONCE
+        start_value = portfolio.get_value(start_date)
+        end_value = portfolio.get_value(end_date)
+
+        if start_value == 0 or end_value == 0:
+            logging.error("Portfolio value could not be retrieved properly.")
+            return
+
+        # Calculate profit manually
+        profit = end_value - start_value
+        logging.info(f"Profit from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}: ${profit:.2f}\n")
+
+        # Calculate annualized return manually
+        days_diff = (end_date - start_date).days
+        years_diff = days_diff / 365.25
+        total_return = end_value / start_value
+        annualized_return = total_return ** (1 / years_diff) - 1
+
+        logging.info("\nSummary of returns:")
+        logging.info(f"- Total return: {(total_return - 1) * 100:.2f}%")
+        logging.info(f"- Time period: {days_diff} days ({years_diff:.2f} years)")
+        logging.info(f"- Annualized return: {annualized_return * 100:.2f}%\n")
+
+        logging.info(f"\nFinal Results:")
+        logging.info(f"- Annualized return: {annualized_return * 100:.2f}%")
+        logging.info(f"- Total profit: ${profit:.2f}")
+
+    except Exception as e:
+        logging.error(f"Calculation failed: {e}")
+
 
 
 if __name__ == "__main__":
-    example()
+    example_portfolio()
