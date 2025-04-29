@@ -1,4 +1,4 @@
-# 📈 Stock Portfolio Tracker
+# Stock Portfolio Tracker
 
 This is a simple Python project that lets you simulate a stock portfolio, track its value over time, and calculate both profit and annualized return based on historical stock prices.
 
@@ -6,20 +6,20 @@ It uses the free `yfinance` library (Yahoo Finance API) to pull real stock data 
 
 ---
 
-## 🚀 Features
+## Features
 - Add and remove stocks with specific quantities to your portfolio.
 - Fetch historical stock prices automatically.
 - Handle non-trading days (weekends, holidays) by searching backward for the latest available price.
 - Calculate:
-  - 📊 Portfolio value on any date
-  - 💰 Total profit over a period
-  - 📈 Annualized return percentage
+  - Portfolio value on any date
+  - Total profit over a period
+  - Annualized return percentage
 - Caches prices during runtime to reduce redundant API calls.
 - Friendly logging to track what's happening.
 
 ---
 
-## 📦 Requirements
+## Requirements
 - Python 3.8+
 - Install dependencies:
     - `yfinance`
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🛠 How to Use
+## How to Use
 
 1. Clone this repository or download the script.
 2. Make sure you have installed `yfinance`.
@@ -47,7 +47,7 @@ The `example_portfolio()` function will:
 
 ---
 
-## 📚 Project Structure
+## Project Structure
 
 | File | Purpose |
 |:-----|:--------|
@@ -57,7 +57,7 @@ The `example_portfolio()` function will:
 
 ---
 
-## 🔥 Example Output
+## Example Output
 
 ```
 Portfolio value on 2024-01-03:
@@ -79,7 +79,7 @@ Final Results:
 
 ---
 
-## ✨ Future Improvements (Ideas)
+## Future Improvements (Ideas)
 
 - Add support for dividends reinvestment.
 - Plot portfolio growth over time using Matplotlib.
